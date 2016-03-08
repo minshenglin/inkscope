@@ -80,16 +80,17 @@ class S3ObjectCtrl:
         # Retrieve the user.rgw.manifest that contains the chunks list for the object
         # usermnf=self.getUserRgwManifest(poolname,extended_objectId)
 
-        # Retrieve the chunk base name in the user.rgw.manifest attribute
-        chunkbasename = self.getChunkBaseName(poolname, extended_objectId)
-
-        print '__Chunk base name: ', chunkbasename
-        if  len(chunkbasename):  # chek if there is chunk por not for the object
-                # Retrieve the chunks list of the object
-            chunks = self.getChunks(bucketId, poolname, objectId, chunkbasename)
-            chunks.append(extended_objectId)  # Add the last object that is around 512.0 kb
-        else :
-            chunks = [extended_objectId]
+        # check the object is multipart upload or not 
+        if self.isMultipartUpload(poolname, bucketId, objectId):
+            print '%s/%s is multipart upload' % (bucketId, objectId)
+            # the chunk size of extended_objectId is zero on multipart upload
+            chunks = self.getMultipartChunks(poolname, bucketId, objectId)
+        else:
+            # Retrieve the chunk base name in the user.rgw.manifest attribute
+            chunkbasename = self.getChunkBaseName(poolname, extended_objectId)
+            print '__Chunk base name: ', chunkbasename
+            chunks = [] if not len(chunkbasename) else self.getChunks(bucketId, poolname, objectId, chunkbasename)
+            chunks.append(extended_objectId)
 
         print "__Chunks list", chunks
         # bucketInfo=self.getBucketInfo(bucketId)
@@ -396,7 +397,7 @@ class S3ObjectCtrl:
     def getChunkBaseName(self, poolName, objectid):
         Log.info("____Get the chunks list for the object [" + objectid + "] and the pool[ " + str(poolName) + "]")
         ioctx = self.cluster.open_ioctx(str(poolName))
-        xattr = ioctx.get_xattr(objectid, 'user.rgw.manifest')
+        xattr = ioctx.get_xattr(str(objectid), 'user.rgw.manifest')
         shadow = xattr.replace('\x00', '').replace('\x01', '').replace('\x02', '').replace('\x03', '').\
                       replace('\x04', '').replace('\x05', '').replace('\x06', '').replace('\x07', '').replace('\x08', '').replace('\x09', '')\
                       .replace('\x10', '').replace('\x11', '').replace('\x12', '').replace('\x0e', '').replace('\x0b', '').replace('\x0c', '')
@@ -462,6 +463,28 @@ class S3ObjectCtrl:
             raise RuntimeError('unable to get the chunks list for the pool % the bucketId %s and the chunkBaseName the manifest %s : %s' % (poolName, bucketId, chunkBaseName, errdata))
 
          return outdata.split('\n')
+
+# This method returns the boolean value about the object on bucket is multipart upload or not
+    def isMultipartUpload(self, poolName, bucketId, objectId):
+        ioctx = self.cluster.open_ioctx(str(poolName)) 
+        multipart_token = '%s__multipart_%s' % (bucketId, objectId)
+        for obj in ioctx.list_objects():
+            if multipart_token in obj.key:
+                return True
+
+        return False
+
+# This method returns the chunk list of object
+    def getMultipartChunks(self, poolName, bucketId, objectId):
+        ioctx = self.cluster.open_ioctx(str(poolName)) 
+        multipart_token = '%s__multipart_%s' % (bucketId, objectId)
+        shadow_token = '%s__shadow_%s' % (bucketId, objectId)
+        chunks = []
+        for obj in ioctx.list_objects():
+            if multipart_token in obj.key or shadow_token in obj.key:
+                chunks.append(obj.key)
+
+        return chunks
 
 # This method retrieves the PG ID for a given pool and an object
 # The output looks like this : ['osdmap', 'e11978', 'pool', "'.rgw.buckets'", '(16)', 'object', "'default.4726.8_fileMaps/000001fd/9731af0ba5f8997929df14de6df583aff39ff94b'", '->', 'pg', '16.c1107af', '(16.7) -> up ([9,6], p9) acting ([9,6], p9)\n']
